@@ -4,27 +4,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.ExperimentalAnimationApi
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.with
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -39,34 +25,25 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
-import com.example.data.AppDatabase
-import com.example.data.Contact
-import com.example.data.MessageEntity
-import com.example.data.PostEntity
-import com.example.data.Repository
-import com.example.data.StoryEntity
-import com.example.ui.FilterUtils
+import com.example.data.*
 import com.example.ui.MainViewModel
-import com.example.ui.MainViewModelFactory
 import com.example.ui.Screen
 import com.example.ui.theme.MyApplicationTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -83,6 +60,12 @@ class MainActivity : ComponentActivity() {
                 Scaffold(
                     modifier = Modifier.fillMaxSize()
                 ) { innerPadding ->
+                    // Set up context refresh on start
+                    val context = LocalContext.current
+                    LaunchedEffect(Unit) {
+                        viewModel.refreshNetworkState(context)
+                    }
+
                     MainLayout(
                         viewModel = viewModel,
                         modifier = Modifier.padding(innerPadding)
@@ -100,1121 +83,867 @@ fun MainLayout(
     modifier: Modifier = Modifier
 ) {
     val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
+    val isPortBound by viewModel.isPortBound.collectAsStateWithLifecycle()
+    val isSimulatorMode by viewModel.isSimulatorMode.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
-    // Nice Instagram-styled Brand Gradient for Story boundaries
-    val storyGradient = Brush.sweepGradient(
-        colors = listOf(
-            Color(0xFF8134AF), // Deep Purple
-            Color(0xFFDD2A7B), // Magenta Pink
-            Color(0xFFF58529), // Bright Orange
-            Color(0xFFFCD116), // Gold Yellow
-            Color(0xFF8134AF)  // Loop back
-        )
-    )
+    // Periodically update IP addresses
+    LaunchedEffect(Unit) {
+        while(true) {
+            viewModel.refreshNetworkState(context)
+            delay(10000)
+        }
+    }
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Handle transitions safely using AnimatedContent
-        AnimatedContent(
-            targetState = currentScreen,
-            transitionSpec = {
-                if (targetState is Screen.Chat || targetState is Screen.StoryViewer) {
-                    slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(300)) with
-                            slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(300))
-                } else {
-                    fadeIn(animationSpec = tween(200)) with fadeOut(animationSpec = tween(200))
-                }
-            },
-            label = "screen_navigation"
-        ) { screen ->
-            when (screen) {
-                is Screen.Home -> FeedScreen(viewModel = viewModel, storyGradient = storyGradient)
-                is Screen.DirectMessages -> InboxScreen(viewModel = viewModel)
-                is Screen.Chat -> ChatDetailScreen(viewModel = viewModel, partnerName = screen.partner)
-                is Screen.StoryViewer -> StoryViewerScreen(viewModel = viewModel, initialIndex = screen.activeIndex)
-                is Screen.AddPost -> AddPostScreen(viewModel = viewModel)
-                is Screen.Profile -> ProfileScreen(viewModel = viewModel)
-            }
-        }
+        Column(modifier = Modifier.fillMaxSize()) {
+            
+            // Custom Dashboard Status Header
+            HeaderBar(
+                isPortBound = isPortBound,
+                isSimulatorMode = isSimulatorMode,
+                viewModel = viewModel
+            )
 
-        // Floating dynamic bottom tabs bar, only shown when not viewing Fullscreen Stories or active Chat
-        val showBottomBar = currentScreen !is Screen.StoryViewer && currentScreen !is Screen.Chat
-        if (showBottomBar) {
+            // Dynamic screen container
             Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
+                    .weight(1f)
                     .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
-                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), RoundedCornerShape(0.dp))
-                    .padding(vertical = 4.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceAround,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val activeColor = MaterialTheme.colorScheme.primary
-                    val inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-
-                    IconButton(
-                        onClick = { viewModel.navigateTo(Screen.Home) },
-                        modifier = Modifier.testTag("nav_feed_tab")
-                    ) {
-                        Icon(
-                            imageVector = if (currentScreen is Screen.Home) Icons.Filled.Home else Icons.Outlined.Home,
-                            contentDescription = "Home Feed",
-                            tint = if (currentScreen is Screen.Home) activeColor else inactiveColor,
-                            modifier = Modifier.size(28.dp)
-                        )
+                AnimatedContent(
+                    targetState = currentScreen,
+                    transitionSpec = {
+                        if (targetState is Screen.Chat) {
+                            slideInHorizontally(initialOffsetX = { it }) + fadeIn() with
+                                    slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
+                        } else {
+                            fadeIn(animationSpec = tween(150)) with fadeOut(animationSpec = tween(150))
+                        }
+                    },
+                    label = "screen_navigation"
+                ) { screen ->
+                    when (screen) {
+                        is Screen.Peers -> PeersScreen(viewModel = viewModel)
+                        is Screen.BulletinBoard -> BulletinBoardScreen(viewModel = viewModel)
+                        is Screen.Chat -> ChatScreen(viewModel = viewModel, partnerName = screen.partner)
+                        is Screen.NetworkDetails -> NetworkDetailsScreen(viewModel = viewModel)
+                        is Screen.Profile -> ProfileScreen(viewModel = viewModel)
                     }
+                }
+            }
 
-                    IconButton(
-                        onClick = { viewModel.navigateTo(Screen.AddPost) },
-                        modifier = Modifier.testTag("nav_add_tab")
-                    ) {
-                        Icon(
-                            imageVector = if (currentScreen is Screen.AddPost) Icons.Filled.AddBox else Icons.Outlined.AddBox,
-                            contentDescription = "New Post",
-                            tint = if (currentScreen is Screen.AddPost) activeColor else inactiveColor,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
+            // High Contrast Bottom M3 Tab Menu
+            val showBottomBar = currentScreen !is Screen.Chat
+            if (showBottomBar) {
+                BottomBar(
+                    currentScreen = currentScreen,
+                    onNavigate = { viewModel.navigateTo(it) }
+                )
+            }
+        }
+    }
+}
 
-                    IconButton(
-                        onClick = { viewModel.navigateTo(Screen.DirectMessages) },
-                        modifier = Modifier.testTag("nav_inbox_tab")
+// -------------------------------------------------------------
+// HEADERS & FOOTERS COMPONENTS
+// -------------------------------------------------------------
+@Composable
+fun HeaderBar(
+    isPortBound: Boolean,
+    isSimulatorMode: Boolean,
+    viewModel: MainViewModel
+) {
+    val context = LocalContext.current
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "OffGrid",
+                        fontFamily = FontFamily.SansSerif,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 24.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.testTag("app_brand_logo")
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    // Connectivity status badge
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (isPortBound) Color(0xFF4CAF50).copy(alpha = 0.15f)
+                                else Color(0xFFFF9800).copy(alpha = 0.15f)
+                            )
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
-                        BadgedBox(
-                            badge = {
-                                // Add a subtle badge indicating live chats
-                                Badge(
-                                    containerColor = Color(0xFFDD2A7B),
-                                    modifier = Modifier.offset(x = (-4).dp, y = 4.dp)
-                                ) {}
-                            }
-                        ) {
-                            Icon(
-                                imageVector = if (currentScreen is Screen.DirectMessages) Icons.Filled.Chat else Icons.Outlined.Chat,
-                                contentDescription = "Direct Messages",
-                                tint = if (currentScreen is Screen.DirectMessages) activeColor else inactiveColor,
-                                modifier = Modifier.size(28.dp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isPortBound) Color(0xFF4CAF50) else Color(0xFFFF9800))
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isPortBound) "Port Bound" else "Simulating Area",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isPortBound) Color(0xFF4CAF50) else Color(0xFFFF9800)
                             )
                         }
                     }
+                }
+                Text(
+                    text = "Decentralized Mesh • No Recharge Needed",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
-                    IconButton(
-                        onClick = { viewModel.navigateTo(Screen.Profile) },
-                        modifier = Modifier.testTag("nav_profile_tab")
-                    ) {
-                        Icon(
-                            imageVector = if (currentScreen is Screen.Profile) Icons.Filled.AccountCircle else Icons.Outlined.AccountCircle,
-                            contentDescription = "My Profile",
-                            tint = if (currentScreen is Screen.Profile) activeColor else inactiveColor,
-                            modifier = Modifier.size(28.dp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = { 
+                        viewModel.refreshNetworkState(context)
+                        viewModel.broadcastDiscoveryHeartbeat()
+                    },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Refresh offline network adapters",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                // Simulator tag toggle quick action
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (isSimulatorMode) MaterialTheme.colorScheme.secondaryContainer
+                            else MaterialTheme.colorScheme.surface
                         )
-                    }
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .clickable { viewModel.toggleSimulatorMode(!isSimulatorMode) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (isSimulatorMode) "Sim Dynamic Match" else "Physical LAN Only",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isSimulatorMode) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
     }
 }
 
+@Composable
+fun BottomBar(
+    currentScreen: Screen,
+    onNavigate: (Screen) -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp),
+        tonalElevation = 4.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.navigationBars)
+    ) {
+        NavigationBar(
+            containerColor = Color.Transparent,
+            tonalElevation = 0.dp,
+            modifier = Modifier.height(72.dp)
+        ) {
+            val activeColor = MaterialTheme.colorScheme.primary
+            val inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+            NavigationBarItem(
+                selected = currentScreen is Screen.Peers,
+                onClick = { onNavigate(Screen.Peers) },
+                icon = {
+                    Icon(
+                        imageVector = if (currentScreen is Screen.Peers) Icons.Filled.NearMe else Icons.Outlined.NearMe,
+                        contentDescription = "Peers Screen Launcher"
+                    )
+                },
+                label = { Text("Nearby Peers", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = activeColor,
+                    unselectedIconColor = inactiveColor,
+                    selectedTextColor = activeColor,
+                    unselectedTextColor = inactiveColor
+                ),
+                modifier = Modifier.testTag("nav_peers_tab")
+            )
+
+            NavigationBarItem(
+                selected = currentScreen is Screen.BulletinBoard,
+                onClick = { onNavigate(Screen.BulletinBoard) },
+                icon = {
+                    Icon(
+                        imageVector = if (currentScreen is Screen.BulletinBoard) Icons.Filled.CellTower else Icons.Outlined.CellTower,
+                        contentDescription = "OffGrid bulletin section launcher"
+                    )
+                },
+                label = { Text("Public Board", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = activeColor,
+                    unselectedIconColor = inactiveColor,
+                    selectedTextColor = activeColor,
+                    unselectedTextColor = inactiveColor
+                ),
+                modifier = Modifier.testTag("nav_board_tab")
+            )
+
+            NavigationBarItem(
+                selected = currentScreen is Screen.NetworkDetails,
+                onClick = { onNavigate(Screen.NetworkDetails) },
+                icon = {
+                    Icon(
+                        imageVector = if (currentScreen is Screen.NetworkDetails) Icons.Filled.Dns else Icons.Outlined.Dns,
+                        contentDescription = "Diagnostics Launcher"
+                    )
+                },
+                label = { Text("Diagnostics", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = activeColor,
+                    unselectedIconColor = inactiveColor,
+                    selectedTextColor = activeColor,
+                    unselectedTextColor = inactiveColor
+                ),
+                modifier = Modifier.testTag("nav_diag_tab")
+            )
+
+            NavigationBarItem(
+                selected = currentScreen is Screen.Profile,
+                onClick = { onNavigate(Screen.Profile) },
+                icon = {
+                    Icon(
+                        imageVector = if (currentScreen is Screen.Profile) Icons.Filled.AccountCircle else Icons.Outlined.AccountCircle,
+                        contentDescription = "My profile screen launcher"
+                    )
+                },
+                label = { Text("Profile ID", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = activeColor,
+                    unselectedIconColor = inactiveColor,
+                    selectedTextColor = activeColor,
+                    unselectedTextColor = inactiveColor
+                ),
+                modifier = Modifier.testTag("nav_profile_tab")
+            )
+        }
+    }
+}
+
 // -------------------------------------------------------------
-// FEED SCREEN (HOME)
+// 1. NEARBY PEERS SCREEN (HOME / DISCOVERY)
 // -------------------------------------------------------------
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FeedScreen(
-    viewModel: MainViewModel,
-    storyGradient: Brush
-) {
-    val posts by viewModel.posts.collectAsStateWithLifecycle()
-    val stories by viewModel.stories.collectAsStateWithLifecycle()
-    val listState = rememberLazyListState()
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(bottom = 56.dp)
-    ) {
-        // App Header
-        TopAppBar(
-            title = {
-                Text(
-                    text = "Instagraph",
-                    fontFamily = FontFamily.SansSerif,
-                    fontWeight = FontWeight.Black,
-                    fontStyle = FontStyle.Italic,
-                    fontSize = 26.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.testTag("app_brand_logo")
-                )
-            },
-            actions = {
-                IconButton(
-                    onClick = { viewModel.navigateTo(Screen.DirectMessages) },
-                    modifier = Modifier.testTag("header_dm_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Send,
-                        contentDescription = "DMs",
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.background
-            )
-        )
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            // Stories Header Carousel
-            item {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp)
-                ) {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        // User's own active Quick Story addition
-                        item {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.clickable {
-                                    viewModel.navigateTo(Screen.AddPost)
-                                }
-                            ) {
-                                Box(
-                                    modifier = Modifier.size(68.dp),
-                                    contentAlignment = Alignment.BottomEnd
-                                ) {
-                                    AsyncImage(
-                                        model = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
-                                        contentDescription = "My avatar",
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(CircleShape)
-                                            .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .size(22.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFFDD2A7B))
-                                            .border(1.5.dp, MaterialTheme.colorScheme.background, CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Add,
-                                            contentDescription = "Add story",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Your Story",
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        // Loaded stories
-                        items(stories.size) { index ->
-                            val story = stories[index]
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .testTag("story_bubble_${story.username}")
-                                    .clickable {
-                                        viewModel.navigateTo(Screen.StoryViewer(index))
-                                    }
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(68.dp)
-                                        .border(
-                                            border = BorderStroke(
-                                                width = 2.5.dp,
-                                                brush = if (story.hasUnseen) storyGradient else Brush.linearGradient(
-                                                    listOf(Color.LightGray, Color.LightGray)
-                                                )
-                                            ),
-                                            shape = CircleShape
-                                        )
-                                        .padding(4.dp)
-                                ) {
-                                    AsyncImage(
-                                        model = story.userAvatar,
-                                        contentDescription = "${story.username} avatar",
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(CircleShape),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = story.username,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-                    }
-                    HorizontalDivider(
-                        modifier = Modifier.padding(top = 10.dp),
-                        thickness = 0.5.dp,
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                    )
-                }
-            }
-
-            // Feed posts list
-            if (posts.isEmpty()) {
-                item {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 80.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            } else {
-                items(posts, key = { it.id }) { post ->
-                    PostCard(
-                        post = post,
-                        onLikeClicked = { viewModel.toggleLike(post) },
-                        onChatClicked = { viewModel.selectChatPartner(post.username) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PostCard(
-    post: PostEntity,
-    onLikeClicked: () -> Unit,
-    onChatClicked: () -> Unit
-) {
-    var isLikeBouncing by remember { mutableStateOf(false) }
-    val scaleFactor by animateFloatAsState(
-        targetValue = if (isLikeBouncing) 1.3f else 1.0f,
-        animationSpec = tween(150),
-        finishedListener = { isLikeBouncing = false }
-    )
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("post_card_${post.username}")
-            .padding(vertical = 4.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.background
-        ),
-        shape = RoundedCornerShape(0.dp)
-    ) {
-        Column {
-            // Header Row (Avatar, Name, Info)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AsyncImage(
-                    model = post.userAvatar,
-                    contentDescription = "${post.username} avatar",
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text(
-                        text = post.username,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    if (post.filterApplied != "Normal") {
-                        Text(
-                            text = "Filter: ${post.filterApplied}",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.weight(1.0f))
-                IconButton(onClick = {}) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Options",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            // Image Container with ColorFilter Applied live!
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1.0f)
-                    .background(Color.Black)
-            ) {
-                AsyncImage(
-                    model = post.imageUrl,
-                    contentDescription = "Post content photo",
-                    colorFilter = FilterUtils.getColorFilter(post.filterApplied),
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-            }
-
-            // Interactive Actions Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = {
-                        isLikeBouncing = true
-                        onLikeClicked()
-                    },
-                    modifier = Modifier.scale(scaleFactor)
-                ) {
-                    Icon(
-                        imageVector = if (post.isLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                        contentDescription = "Like button",
-                        tint = if (post.isLiked) Color.Red else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
-
-                IconButton(onClick = onChatClicked) {
-                    Icon(
-                        imageVector = Icons.Outlined.Chat,
-                        contentDescription = "Comment and Direct Message",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.weight(1.0f))
-
-                // Custom badge highlighting filter applied
-                if (post.filterApplied != "Normal") {
-                    Box(
-                        modifier = Modifier
-                            .padding(end = 12.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = post.filterApplied,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-
-            // Likes and Captions section
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 2.dp)
-            ) {
-                Text(
-                    text = "${post.likesCount} likes",
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "${post.username} ",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = post.caption,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(
-                    thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-                )
-            }
-        }
-    }
-}
-
-// -------------------------------------------------------------
-// STORY VIEWER SCREEN
-// -------------------------------------------------------------
-@Composable
-fun StoryViewerScreen(
-    viewModel: MainViewModel,
-    initialIndex: Int
-) {
-    val stories by viewModel.stories.collectAsStateWithLifecycle()
-    var currentIndex by remember { mutableStateOf(initialIndex) }
-    var userTextReply by remember { mutableStateOf("") }
-
-    if (stories.isEmpty() || currentIndex !in stories.indices) {
-        viewModel.navigateBack()
-        return
-    }
-
-    val story = stories[currentIndex]
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .windowInsetsPadding(WindowInsets.statusBars)
-    ) {
-        // Main Story Image Fit Fullscreen
-        AsyncImage(
-            model = story.imageUrl,
-            contentDescription = "Story active slide",
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(vertical = 40.dp),
-            contentScale = ContentScale.Fit
-        )
-
-        // Overlay Interactive zones for simple tap-to-navigate (Left and Right halves)
-        Row(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .weight(1.0f)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        if (currentIndex > 0) {
-                            currentIndex--
-                        } else {
-                            viewModel.navigateBack()
-                        }
-                    }
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .weight(1.0f)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        if (currentIndex < stories.size - 1) {
-                            currentIndex++
-                        } else {
-                            viewModel.navigateBack()
-                        }
-                    }
-            )
-        }
-
-        // Top UI items (Progress bar overlay & Sender Profile)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .align(Alignment.TopCenter)
-        ) {
-            // Segments of progress lines
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                stories.forEachIndexed { idx, _ ->
-                    val isViewed = idx < currentIndex
-                    val isActive = idx == currentIndex
-                    LinearProgressIndicator(
-                        progress = if (isViewed) 1.0f else if (isActive) 0.6f else 0f,
-                        modifier = Modifier
-                            .weight(1.0f)
-                            .height(3.dp)
-                            .clip(RoundedCornerShape(2.dp)),
-                        color = Color.White,
-                        trackColor = Color.White.copy(alpha = 0.3f)
-                    )
-                }
-            }
-
-            // Sender Avatar, Name and Close button
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AsyncImage(
-                    model = story.userAvatar,
-                    contentDescription = "${story.username} story avatar",
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text(
-                        text = story.username,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        fontSize = 14.sp
-                    )
-                    if (story.caption.isNotEmpty()) {
-                        Text(
-                            text = story.caption,
-                            color = Color.White.copy(alpha = 0.85f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.weight(1.0f))
-                IconButton(
-                    onClick = { viewModel.navigateBack() },
-                    modifier = Modifier.testTag("story_close_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close story viewer",
-                        tint = Color.White
-                    )
-                }
-            }
-        }
-
-        // Bottom UI section: Send a quick reply straight to user's DMs
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
-                .align(Alignment.BottomCenter)
-        ) {
-            OutlinedTextField(
-                value = userTextReply,
-                onValueChange = { userTextReply = it },
-                placeholder = { Text("Send reply to ${story.username}...", color = Color.White.copy(0.6f)) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("story_reply_input"),
-                shape = RoundedCornerShape(24.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color.White,
-                    unfocusedBorderColor = Color.White.copy(0.5f),
-                    focusedContainerColor = Color.White.copy(alpha = 0.15f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.08f)
-                ),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(
-                    onSend = {
-                        if (userTextReply.isNotBlank()) {
-                            viewModel.sendMessage(story.username, userTextReply)
-                            userTextReply = ""
-                            // Go back with visual dynamic feedback
-                            viewModel.navigateBack()
-                        }
-                    }
-                ),
-                trailingIcon = {
-                    IconButton(
-                        onClick = {
-                            if (userTextReply.isNotBlank()) {
-                                viewModel.sendMessage(story.username, userTextReply)
-                                userTextReply = ""
-                                viewModel.navigateBack()
-                            }
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Send,
-                            contentDescription = "Send story DM reply",
-                            tint = Color.White
-                        )
-                    }
-                }
-            )
-        }
-    }
-}
-
-// -------------------------------------------------------------
-// ADD POST SCREEN (WITH PHOTO SELECTION AND LIVE FILTERS)
-// -------------------------------------------------------------
-@Composable
-fun AddPostScreen(
+fun PeersScreen(
     viewModel: MainViewModel
 ) {
-    val selectedImage by viewModel.selectedImageToUpload.collectAsStateWithLifecycle()
-    val customUrl by viewModel.customImageUrl.collectAsStateWithLifecycle()
-    val activeFilter by viewModel.selectedFilter.collectAsStateWithLifecycle()
-    val captionText by viewModel.captionText.collectAsStateWithLifecycle()
-    val coroutineScope = rememberCoroutineScope()
+    val contactsList by viewModel.contacts.collectAsStateWithLifecycle()
+    val localIp by viewModel.localIpAddress.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(bottom = 56.dp)
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // Screen title
-        Box(
+    Column(modifier = Modifier.fillMaxSize()) {
+        
+        // Instruction card explaining zero recharge operation
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            contentAlignment = Alignment.Center
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+            ),
+            shape = RoundedCornerShape(12.dp)
         ) {
-            Text(
-                text = "New Post",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Wifi,
+                    contentDescription = "Wifi connection info",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "How to chat offline without Recharge:",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = "Connect to the same Wi-Fi router or start a mobile hotspot on one phone and connect others to it. You don't need internet or cellular balance! The app discovers peers instantly.",
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.9f)
+                    )
+                }
+            }
         }
 
-        LazyColumn(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // Live active photo preview with selected Filter Applied
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1.2f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = selectedImage,
-                        contentDescription = "Selected photo preview",
-                        colorFilter = FilterUtils.getColorFilter(activeFilter),
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                    // Active filter label badge
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(12.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(Color.Black.copy(0.6f))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "Filter: $activeFilter",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-
-            // Filters selector carousel (The key filter chips display)
-            item {
-                Column {
-                    Text(
-                        text = "Visual Filters",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        items(FilterUtils.FilterList) { filterName ->
-                            val isSelected = filterName == activeFilter
-                            Box(
-                                modifier = Modifier
-                                    .testTag("filter_chip_$filterName")
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(
-                                        if (isSelected) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.surfaceVariant
-                                    )
-                                    .clickable { viewModel.selectFilter(filterName) }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp)
-                            ) {
-                                Text(
-                                    text = filterName,
-                                    fontSize = 12.sp,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Camera presets carousel
-            item {
-                Column {
-                    Text(
-                        text = "Capture / Select Photo Preset",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        items(viewModel.presetImages) { url ->
-                            val isChosen = url == selectedImage
-                            Box(
-                                modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .border(
-                                        width = if (isChosen) 3.dp else 1.dp,
-                                        color = if (isChosen) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                        shape = RoundedCornerShape(8.dp)
-                                    )
-                                    .clickable { viewModel.selectPresetImage(url) }
-                            ) {
-                                AsyncImage(
-                                    model = url,
-                                    contentDescription = "preset choice",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Custom URL entry
-            item {
-                OutlinedTextField(
-                    value = customUrl,
-                    onValueChange = { viewModel.setCustomImageUrl(it) },
-                    label = { Text("Or paste image URL link") },
-                    placeholder = { Text("https://example.com/photo.jpg") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-
-            // Caption details
-            item {
-                OutlinedTextField(
-                    value = captionText,
-                    onValueChange = { viewModel.updateCaption(it) },
-                    label = { Text("Write a gorgeous caption...") },
-                    placeholder = { Text("What details are behind this story? #warm #instagraph") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("new_post_caption_input")
-                        .height(100.dp),
-                    maxLines = 4,
-                    shape = RoundedCornerShape(10.dp)
-                )
-            }
-
-            // Publish Button triggers sharing
-            item {
-                Button(
-                    onClick = { viewModel.sharePost() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("publish_post_btn")
-                        .height(50.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(
-                        text = "Share to Feed and Story",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-    }
-}
-
-// -------------------------------------------------------------
-// DIRECT MESSAGES (INBOX SCREEN)
-// -------------------------------------------------------------
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun InboxScreen(
-    viewModel: MainViewModel
-) {
-    val contacts by viewModel.contacts.collectAsStateWithLifecycle()
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(bottom = 56.dp)
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // Header
-        TopAppBar(
-            title = {
-                Text(
-                    text = "Messages Inbox",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                )
-            },
-            navigationIcon = {
-                IconButton(onClick = { viewModel.navigateBack() }) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Back"
-                    )
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.background
-            )
-        )
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = 8.dp)
-        ) {
-            if (contacts.isEmpty()) {
-                item {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 100.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "No active conversations",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else {
-                items(contacts, key = { it.username }) { contact ->
-                    ContactRow(
-                        contact = contact,
-                        onClick = { viewModel.selectChatPartner(contact.username) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ContactRow(
-    contact: Contact,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("inbox_row_${contact.username}")
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Red unseen indicator
-        Box(
-            modifier = Modifier.size(8.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            if (contact.hasUnread) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFDD2A7B))
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-
-        // Avatar
-        AsyncImage(
-            model = contact.avatarUrl,
-            contentDescription = "${contact.username} avatar",
-            modifier = Modifier
-                .size(46.dp)
-                .clip(CircleShape),
-            contentScale = ContentScale.Crop
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-
-        // Text details (last message, username)
-        Column(
-            modifier = Modifier.weight(1.0f)
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = contact.username,
+                text = "Nearby Radio Terminals (${contactsList.size})",
                 fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
+                fontSize = 15.sp,
                 color = MaterialTheme.colorScheme.onSurface
             )
-            Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = contact.lastMessageText,
-                fontSize = 12.sp,
-                color = if (contact.hasUnread) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = if (contact.hasUnread) FontWeight.Bold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                text = "My IP: $localIp",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.secondary
             )
         }
 
-        Icon(
-            imageVector = Icons.Default.KeyboardArrowRight,
-            contentDescription = "Open chat",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-        )
+        Spacer(modifier = Modifier.height(4.dp))
+
+        if (contactsList.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Wifi,
+                        contentDescription = "Searching wifi peers",
+                        tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Scanning Offline Frequencies...",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Check that your Wi-Fi is turned on, or connect nodes locally. Tap 'Manual Heartbeat' in Diagnostic menu.",
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(contactsList, key = { it.username }) { contact ->
+                    PeerCard(
+                        contact = contact,
+                        onChatClicked = { viewModel.selectChatPartner(contact.username) }
+                    )
+                }
+            }
+        }
     }
 }
 
-// -------------------------------------------------------------
-// CHAT DETAIL SCREEN
-// -------------------------------------------------------------
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatDetailScreen(
-    viewModel: MainViewModel,
-    partnerName: String
+fun PeerCard(
+    contact: Contact,
+    onChatClicked: () -> Unit
 ) {
-    val messages by viewModel.chatMessages.collectAsStateWithLifecycle()
-    var textInput by remember { mutableStateOf("") }
-    val scrollState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-
-    // Scroll to latest message on receive
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            scrollState.animateScrollToItem(messages.size - 1)
-        }
-    }
-
-    Column(
+    Card(
+        onClick = onChatClicked,
         modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .fillMaxWidth()
+            .testTag("peer_contact_${contact.username}"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
+        ),
+        shape = RoundedCornerShape(12.dp)
     ) {
-        // Header
-        TopAppBar(
-            title = {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box {
+                AsyncImage(
+                    model = contact.avatarUrl,
+                    contentDescription = contact.username,
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(CircleShape)
+                        .border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+                // Active status beacon
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clip(CircleShape)
+                        .background(if (contact.isOnline) Color(0xFF4CAF50) else Color(0xFF757575))
+                        .align(Alignment.BottomEnd)
+                        .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    AsyncImage(
-                        model = viewModel.getAvatarForUser(partnerName),
-                        contentDescription = "$partnerName avatar",
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = partnerName,
+                        text = "@${contact.username}",
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    
+                    Text(
+                        text = contact.distance,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
-            },
-            navigationIcon = {
+                
+                Spacer(modifier = Modifier.height(2.dp))
+                
+                Text(
+                    text = contact.lastMessageText,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                // Tech indicator row
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = contact.connectionType,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                    if (contact.hasUnread) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFFFF5252))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "NEW PACKET",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.width(8.dp))
+            
+            Icon(
+                imageVector = Icons.Default.Chat,
+                contentDescription = "Chat with partner",
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// 2. DECENTRALIZED BULLETIN BOARD SCREEN
+// -------------------------------------------------------------
+@Composable
+fun BulletinBoardScreen(
+    viewModel: MainViewModel
+) {
+    val bulletins by viewModel.bulletins.collectAsStateWithLifecycle()
+    var userPostText by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        
+        // Post box
+        Surface(
+            tonalElevation = 2.dp,
+            color = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "Broadcast Local Shout / Notice",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+
+                OutlinedTextField(
+                    value = userPostText,
+                    onValueChange = { userPostText = it },
+                    placeholder = { Text("What is happening nearby? Type a zero-data local broadcast packet...", fontSize = 13.sp) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("new_post_caption_input")
+                        .height(84.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    maxLines = 3,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (userPostText.isNotBlank()) {
+                            viewModel.publishBulletin(userPostText)
+                            userPostText = ""
+                        }
+                    })
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        if (userPostText.isNotBlank()) {
+                            viewModel.publishBulletin(userPostText)
+                            userPostText = ""
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .testTag("publish_post_btn")
+                        .height(36.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.Send, contentDescription = "Send offline packets", modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Broadcast Packet", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = "Global Local Shoutbox Frequency",
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        if (bulletins.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No public bulletins caught around this router node.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(0.6f)
+                )
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(bulletins, key = { it.id }) { post ->
+                    BulletinCard(
+                        post = post,
+                        onLikeClicked = { viewModel.toggleLikePost(post) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BulletinCard(
+    post: PostEntity,
+    onLikeClicked: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("post_card_${post.username}"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // Header: User details
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                AsyncImage(
+                    model = post.userAvatar,
+                    contentDescription = post.username,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = "@${post.username}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Transmitted via: ${post.locationSimulated}",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Body: Message Text
+            Text(
+                text = post.text,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Footer actions (Local mesh upvotes)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // Time tag
+                Text(
+                    text = "Hop verified: 1s ago",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(0.6f)
+                )
+
+                // Backing upvote button
+                Surface(
+                    color = if (post.isLiked) MaterialTheme.colorScheme.secondaryContainer
+                            else Color.Transparent,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.clickable { onLikeClicked() }
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (post.isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = "Mesh packet backing",
+                            tint = if (post.isLiked) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${post.likesCount} upvotes",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// 3. PRIVATE RADIO CHAT DETAIL SCREEN
+// -------------------------------------------------------------
+@Composable
+fun ChatScreen(
+    viewModel: MainViewModel,
+    partnerName: String
+) {
+    val messages by viewModel.chatMessages.collectAsStateWithLifecycle()
+    val partnerStream by viewModel.peers.collectAsStateWithLifecycle()
+    val myUsername by viewModel.myUsername.collectAsStateWithLifecycle()
+    
+    val partnerDetails = partnerStream.find { it.username.lowercase() == partnerName.lowercase() }
+    
+    var typedText by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+
+    // Scroll to latest message on load
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        // Chat screen custom header bar
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp),
+            tonalElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 IconButton(onClick = { viewModel.navigateBack() }) {
                     Icon(
                         imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Back navigation"
+                        contentDescription = "Back back to peers menu"
                     )
                 }
-            },
-            actions = {
-                IconButton(onClick = {}) {
-                    Icon(
-                        imageVector = Icons.Default.Phone,
-                        contentDescription = "Voice Call",
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
-            )
-        )
 
-        // Messaging list
+                Spacer(modifier = Modifier.width(4.dp))
+
+                Box {
+                    AsyncImage(
+                        model = partnerDetails?.avatarUrl ?: viewModel.getAvatarForUser(partnerName),
+                        contentDescription = partnerName,
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(if (partnerDetails?.isOnline == true) Color(0xFF4CAF50) else Color(0xFF757575))
+                            .align(Alignment.BottomEnd)
+                            .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column {
+                    Text(
+                        text = "@$partnerName",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "${partnerDetails?.connectionType ?: "Static Mesh"} • ${partnerDetails?.distance ?: "Local Station"}",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+
+        // Messages list
         LazyColumn(
-            state = scrollState,
+            state = listState,
             modifier = Modifier
-                .fillMaxWidth()
-                .weight(1.0f)
-                .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(vertical = 12.dp),
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(messages) { message ->
-                val isMe = message.sender == "me"
-                Column(
+            items(messages, key = { it.id }) { message ->
+                val isMe = message.sender.lowercase() == "me" || message.sender.lowercase() == myUsername.lowercase()
+                
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = if (isMe) Alignment.End else Alignment.Start
+                    horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start
                 ) {
                     Box(
                         modifier = Modifier
@@ -1222,33 +951,36 @@ fun ChatDetailScreen(
                                 RoundedCornerShape(
                                     topStart = 16.dp,
                                     topEnd = 16.dp,
-                                    bottomStart = if (isMe) 16.dp else 0.dp,
-                                    bottomEnd = if (isMe) 0.dp else 16.dp
+                                    bottomStart = if (isMe) 16.dp else 4.dp,
+                                    bottomEnd = if (isMe) 4.dp else 16.dp
                                 )
                             )
                             .background(
                                 if (isMe) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.secondaryContainer
                             )
-                            .padding(horizontal = 14.dp, vertical = 9.dp)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                            .widthIn(max = 280.dp)
                     ) {
                         Column {
-                            if (message.mediaUrl != null) {
-                                AsyncImage(
-                                    model = message.mediaUrl,
-                                    contentDescription = "Chat media attached",
-                                    modifier = Modifier
-                                        .size(160.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .padding(bottom = 4.dp),
-                                    contentScale = ContentScale.Crop
-                                )
-                            }
-                            if (message.text.isNotEmpty()) {
+                            Text(
+                                text = message.text,
+                                fontSize = 13.sp,
+                                color = if (isMe) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            // Hop/Protocol transmission verification
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.End,
+                                modifier = Modifier.align(Alignment.End)
+                            ) {
                                 Text(
-                                    text = message.text,
-                                    color = if (isMe) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
-                                    fontSize = 14.sp
+                                    text = "Mesh • ${message.hopCount} hop",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isMe) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                                            else MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
                                 )
                             }
                         }
@@ -1257,352 +989,394 @@ fun ChatDetailScreen(
             }
         }
 
-        // Horizontal Quick Photo Presets attachment bar
+        // Quick replies chips row to let them test response values instantly!
+        val suggestions = listOf("How does this work?", "No recharge?", "Meet up?")
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp))
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = "Tap to Send Photo DM:",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            viewModel.presetImages.take(4).forEach { url ->
-                Box(
+            suggestions.forEach { suggestion ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable {
-                            viewModel.sendMessage(partnerName, "Sent an attachment!", url)
-                        }
+                        .clickable { typedText = suggestion }
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
                 ) {
-                    AsyncImage(
-                        model = url,
-                        contentDescription = "Quick send attachment",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                    Text(
+                        text = suggestion,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
                 }
             }
         }
 
-        // Bottom text field entry row
-        Row(
+        // Active message typing entry drawer bar
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp),
+            tonalElevation = 2.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
-                .background(MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp))
-                .padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .windowInsetsPadding(WindowInsets.ime)
         ) {
-            OutlinedTextField(
-                value = textInput,
-                onValueChange = { textInput = it },
-                placeholder = { Text("Write message here...") },
+            Row(
                 modifier = Modifier
-                    .weight(1.0f)
-                    .testTag("chat_input_text_field"),
-                shape = RoundedCornerShape(26.dp),
-                trailingIcon = {
-                    IconButton(
-                        onClick = {
-                            if (textInput.isNotBlank()) {
-                                viewModel.sendMessage(partnerName, textInput)
-                                textInput = ""
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = typedText,
+                    onValueChange = { typedText = it },
+                    placeholder = { Text("Write offline local message packet...", fontSize = 13.sp) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("story_reply_input"),
+                    shape = RoundedCornerShape(24.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if (typedText.isNotBlank()) {
+                                viewModel.sendMessage(partnerName, typedText)
+                                typedText = ""
                             }
                         }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Send,
-                            contentDescription = "Send message",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(
-                    onSend = {
-                        if (textInput.isNotBlank()) {
-                            viewModel.sendMessage(partnerName, textInput)
-                            textInput = ""
-                        }
-                    }
+                    ),
+                    maxLines = 2
                 )
-            )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                IconButton(
+                    onClick = {
+                        if (typedText.isNotBlank()) {
+                            viewModel.sendMessage(partnerName, typedText)
+                            typedText = ""
+                        }
+                    },
+                    modifier = Modifier
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        .size(42.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Send,
+                        contentDescription = "Send offline message packets",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
         }
     }
 }
 
 // -------------------------------------------------------------
-// PROFILE GALLERY AND DETAIL SCREEN
+// 4. PORT DIAGNOSTICS & SYSTEM LOGS SCREEN
+// -------------------------------------------------------------
+@Composable
+fun NetworkDetailsScreen(
+    viewModel: MainViewModel
+) {
+    val logs by viewModel.networkLog.collectAsStateWithLifecycle()
+    val isPortBound by viewModel.isPortBound.collectAsStateWithLifecycle()
+    val localIp by viewModel.localIpAddress.collectAsStateWithLifecycle()
+    val isSimulatorMode by viewModel.isSimulatorMode.collectAsStateWithLifecycle()
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Text(
+                text = "Mesh Hardware & Core Diagnostics",
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 18.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "Live telemetry readings of local UDP broadcasts",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // Interactive diagnostics stats card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "ACTIVE INTERFACES",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    DiagnosticStatRow(
+                        label = "Core Protocol Listener Port",
+                        value = "8888 (Multicast/UDP Broadcast)",
+                        isGood = isPortBound
+                    )
+                    DiagnosticStatRow(
+                        label = "P2P Socket Interface State",
+                        value = if (isPortBound) "Listening (Active Receiver)" else "Offline (Sandbox Bound)",
+                        isGood = isPortBound
+                    )
+                    DiagnosticStatRow(
+                        label = "Local Base Station Address",
+                        value = localIp,
+                        isGood = localIp != "0.0.0.0"
+                    )
+                    DiagnosticStatRow(
+                        label = "Virtual Peer Simulator Eng",
+                        value = if (isSimulatorMode) "ENABLED (Relays active)" else "DISABLED (Physical-only)",
+                        isGood = isSimulatorMode
+                    )
+                }
+            }
+        }
+
+        // Manual beacon broadcasting controllers box
+        item {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "Offline Test Handshake Trigger",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = "Force host packet broadcasting now over current router network or hotpoints to awaken any sleeping terminals.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(0.8f),
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { viewModel.broadcastDiscoveryHeartbeat() },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Discovery Pulse", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        
+                        OutlinedButton(
+                            onClick = { viewModel.startUdpSocketEngine() },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Reset Sockets", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Live Log terminal screen
+        item {
+            Text(
+                text = "Hex-Mesh Relay Activity Output",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        items(logs) { log ->
+            Text(
+                text = log,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = if (log.contains("Failed") || log.contains("Error")) Color(0xFFFF5252)
+                        else if (log.contains("Received")) Color(0xFF4CAF50)
+                        else if (log.contains("Discovery") || log.contains("Discovered")) Color(0xFF64B5F6)
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(0.35f), RoundedCornerShape(4.dp))
+                    .padding(6.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun DiagnosticStatRow(
+    label: String,
+    value: String,
+    isGood: Boolean
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column {
+            Text(
+                text = label,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = value,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceOrSecondary()
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(if (isGood) Color(0xFF4CAF50) else Color(0xFFFF9800))
+        )
+    }
+}
+
+@Composable
+fun ColorScheme.onSurfaceOrSecondary(): Color {
+    return onSurface
+}
+
+// -------------------------------------------------------------
+// 5. MY PROFILE SETTINGS SCREEN
 // -------------------------------------------------------------
 @Composable
 fun ProfileScreen(
     viewModel: MainViewModel
 ) {
-    val posts by viewModel.posts.collectAsStateWithLifecycle()
-    val userName by viewModel.userName.collectAsStateWithLifecycle()
-    val userBio by viewModel.userBio.collectAsStateWithLifecycle()
+    val myName by viewModel.myUsername.collectAsStateWithLifecycle()
+    val myStatus by viewModel.myStatus.collectAsStateWithLifecycle()
 
-    var showEditDialog by remember { mutableStateOf(false) }
-
-    // User's own posts list
-    val myPosts = posts.filter { it.username == "me" }
+    var editingName by remember { mutableStateOf(myName) }
+    var editingStatus by remember { mutableStateOf(myStatus) }
+    var showSavedMessage by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(bottom = 56.dp)
-            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // App top identity
-        Box(
+        Text(
+            text = "My Mesh Call Sign",
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 18.sp,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        AsyncImage(
+            model = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250",
+            contentDescription = "My avatar",
+            modifier = Modifier
+                .size(100.dp)
+                .clip(CircleShape)
+                .border(2.5.dp, MaterialTheme.colorScheme.primary, CircleShape),
+            contentScale = ContentScale.Crop
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = editingName,
+            onValueChange = { editingName = it },
+            label = { Text("Mesh Call Sign (No Spaces)") },
+            placeholder = { Text("e.g. shivam") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(10.dp),
+            leadingIcon = { Icon(imageVector = Icons.Default.AccountCircle, contentDescription = null) },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
+        )
+
+        OutlinedTextField(
+            value = editingStatus,
+            onValueChange = { editingStatus = it },
+            label = { Text("Broadcast Status Tag Line") },
+            placeholder = { Text("Let peers know what you need or offer...") },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(10.dp),
+            leadingIcon = { Icon(imageVector = Icons.Default.Wifi, contentDescription = null) },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = {
+                viewModel.updateProfile(editingName, editingStatus)
+                showSavedMessage = true
+            })
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Button(
+            onClick = {
+                viewModel.updateProfile(editingName, editingStatus)
+                showSavedMessage = true
+            },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
+                .height(48.dp)
+                .testTag("publish_post_btn"),
+            shape = RoundedCornerShape(10.dp)
         ) {
-            Text(
-                text = userName,
-                fontWeight = FontWeight.Black,
-                fontSize = 17.sp,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Text("Update Broadcasting profile", fontWeight = FontWeight.Bold, fontSize = 13.sp)
         }
 
-        // Details header area
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            AsyncImage(
-                model = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
-                contentDescription = "Own profile avatar",
-                modifier = Modifier
-                    .size(80.dp)
-                    .clip(CircleShape),
-                contentScale = ContentScale.Crop
+        AnimatedVisibility(visible = showSavedMessage) {
+            Text(
+                text = "Mesh Profile broadcast updated!",
+                color = Color(0xFF4CAF50),
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp
             )
-
-            Spacer(modifier = Modifier.width(36.dp))
-
-            // Stat columns
-            Row(
-                modifier = Modifier.weight(1.0f),
-                horizontalArrangement = Arrangement.SpaceAround
-            ) {
-                ProfileStatColumn(count = myPosts.size.toString(), label = "Posts")
-                ProfileStatColumn(count = "1.8K", label = "Followers")
-                ProfileStatColumn(count = "460", label = "Following")
+            LaunchedEffect(showSavedMessage) {
+                delay(3000)
+                showSavedMessage = false
             }
         }
 
-        // Bio section
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            Text(
-                text = userName,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = userBio,
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.weight(1f))
 
-            Button(
-                onClick = { showEditDialog = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("edit_profile_btn"),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
-                ),
-                shape = RoundedCornerShape(8.dp)
-            ) {
+        // Explain mesh network topology
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(0.5f)
+            )
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
                 Text(
-                    text = "Edit Profile Info",
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    text = "🛡️ Secure Off-Grid Routing Details",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Unlike internet chats, OffGrid works via ad-hoc Local Subnet packets. Packets are stored on your local flash memory database and relayed automatically. No metadata is shared with servers, making your chats highly censorship-proof and resilient against central infrastructure blackouts.",
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(0.8f)
                 )
             }
         }
-
-        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(0.5f))
-
-        // Gallery Grid of Post Items
-        if (myPosts.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1.0f),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CameraAlt,
-                        contentDescription = "no posts",
-                        modifier = Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "No shared posts yet",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                    )
-                }
-            }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("profile_posts_grid"),
-                contentPadding = PaddingValues(2.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                items(myPosts) { post ->
-                    Box(
-                        modifier = Modifier
-                            .aspectRatio(1.0f)
-                            .background(Color.Black)
-                    ) {
-                        AsyncImage(
-                            model = post.imageUrl,
-                            contentDescription = "grid item",
-                            colorFilter = FilterUtils.getColorFilter(post.filterApplied),
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                        // Filter label watermark
-                        if (post.filterApplied != "Normal") {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomStart)
-                                    .padding(4.dp)
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(Color.Black.copy(0.4f))
-                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = post.filterApplied,
-                                    color = Color.White,
-                                    fontSize = 8.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Modal Edit Profile Dialog Form
-    if (showEditDialog) {
-        var tempName by remember { mutableStateOf(userName) }
-        var tempBio by remember { mutableStateOf(userBio) }
-
-        Dialog(onDismissRequest = { showEditDialog = false }) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .wrapContentHeight(),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Text(
-                        text = "Edit Identity profile",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    OutlinedTextField(
-                        value = tempName,
-                        onValueChange = { tempName = it },
-                        label = { Text("Display username") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    OutlinedTextField(
-                        value = tempBio,
-                        onValueChange = { tempBio = it },
-                        label = { Text("Biography details") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(90.dp),
-                        maxLines = 3
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TextButton(onClick = { showEditDialog = false }) {
-                            Text("Cancel")
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                viewModel.updateProfile(tempName, tempBio)
-                                showEditDialog = false
-                            },
-                            modifier = Modifier.testTag("save_profile_btn")
-                        ) {
-                            Text("Save details")
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ProfileStatColumn(
-    count: String,
-    label: String
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = count,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.ExtraBold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = label,
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }

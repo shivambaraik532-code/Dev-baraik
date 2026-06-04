@@ -30,21 +30,24 @@ interface PostDao {
 }
 
 @Dao
-interface StoryDao {
-    @Query("SELECT * FROM stories ORDER BY timestamp DESC")
-    fun getAllStories(): Flow<List<StoryEntity>>
+interface PeerDao {
+    @Query("SELECT * FROM peers ORDER BY isOnline DESC, lastSeen DESC")
+    fun getAllPeers(): Flow<List<PeerEntity>>
+
+    @Query("SELECT * FROM peers WHERE username = :username LIMIT 1")
+    suspend fun getPeerByUsername(username: String): PeerEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertStory(story: StoryEntity)
+    suspend fun insertPeer(peer: PeerEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(peers: List<PeerEntity>)
 
     @Update
-    suspend fun updateStory(story: StoryEntity)
+    suspend fun updatePeer(peer: PeerEntity)
 
-    @Query("DELETE FROM stories")
+    @Query("DELETE FROM peers")
     suspend fun deleteAll()
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(stories: List<StoryEntity>)
 }
 
 @Dao
@@ -65,10 +68,10 @@ interface MessageDao {
     suspend fun insertAll(messages: List<MessageEntity>)
 }
 
-@Database(entities = [PostEntity::class, StoryEntity::class, MessageEntity::class], version = 1, exportSchema = false)
+@Database(entities = [PostEntity::class, PeerEntity::class, MessageEntity::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun postDao(): PostDao
-    abstract fun storyDao(): StoryDao
+    abstract fun peerDao(): PeerDao
     abstract fun messageDao(): MessageDao
 
     companion object {
@@ -80,7 +83,7 @@ abstract class AppDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "instagraph_database"
+                    "offgrid_database"
                 )
                 .fallbackToDestructiveMigration()
                 .build()

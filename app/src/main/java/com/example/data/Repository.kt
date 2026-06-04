@@ -1,6 +1,7 @@
 package com.example.data
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -8,42 +9,50 @@ class Repository(
     private val db: AppDatabase
 ) {
     val postsFlow: Flow<List<PostEntity>> = db.postDao().getAllPosts()
-    val storiesFlow: Flow<List<StoryEntity>> = db.storyDao().getAllStories()
+    val peersFlow: Flow<List<PeerEntity>> = db.peerDao().getAllPeers()
 
     suspend fun insertPost(post: PostEntity) = db.postDao().insertPost(post)
     suspend fun updatePost(post: PostEntity) = db.postDao().updatePost(post)
 
-    suspend fun insertStory(story: StoryEntity) = db.storyDao().insertStory(story)
-    suspend fun updateStory(story: StoryEntity) = db.storyDao().updateStory(story)
+    suspend fun insertPeer(peer: PeerEntity) = db.peerDao().insertPeer(peer)
+    suspend fun getPeerByUsername(username: String): PeerEntity? = db.peerDao().getPeerByUsername(username)
+    suspend fun updatePeer(peer: PeerEntity) = db.peerDao().updatePeer(peer)
 
     fun getMessagesBetween(user1: String, user2: String): Flow<List<MessageEntity>> =
         db.messageDao().getMessagesBetween(user1, user2)
 
     fun getContactsFlow(currentUser: String): Flow<List<Contact>> {
-        return db.messageDao().getAllUserMessages(currentUser).map { messages ->
-            val partners = messages.map { if (it.sender == currentUser) it.receiver else it.sender }
+        val messagesFlow = db.messageDao().getAllUserMessages(currentUser)
+        val peersFlow = db.peerDao().getAllPeers()
+
+        return combine(messagesFlow, peersFlow) { messages, peers ->
+            // Extract all people we have chatted with
+            val messagedPartners = messages.map { if (it.sender == currentUser) it.receiver else it.sender }
                 .distinct()
                 .filter { it != currentUser }
-            
-            // If we have nobody we talked to, make sure the preset contacts are displayed
-            val allContactsList = if (partners.isEmpty()) {
-                listOf("Alice", "Bob", "Charlie", "Diana")
-            } else {
-                (partners + listOf("Alice", "Bob", "Charlie", "Diana")).distinct()
-            }
 
-            allContactsList.map { partner ->
+            // Combine with peer list
+            val peerUsernames = peers.map { it.username }
+            val allUniquePartners = (messagedPartners + peerUsernames).distinct()
+
+            allUniquePartners.map { partner ->
+                val peerInfo = peers.find { it.username.lowercase() == partner.lowercase() }
+                
                 val partnerMessages = messages.filter { 
                     (it.sender == partner && it.receiver == currentUser) || 
                     (it.sender == currentUser && it.receiver == partner) 
                 }
-                val latest = partnerMessages.maxByOrNull { it.timestamp }
-                val lastText = latest?.text ?: "Swipe left to chat!"
-                val lastTime = latest?.timestamp ?: (System.currentTimeMillis() - 3600000 * 2)
                 
+                val latest = partnerMessages.maxByOrNull { it.timestamp }
+                val lastText = latest?.text ?: "No messages in offline buffer"
+                val lastTime = latest?.timestamp ?: (System.currentTimeMillis() - 3600000 * 2)
+
                 Contact(
                     username = partner,
-                    avatarUrl = getAvatarForUser(partner),
+                    avatarUrl = peerInfo?.avatarUrl ?: getAvatarForUser(partner),
+                    connectionType = peerInfo?.connectionType ?: "Virtual Node",
+                    distance = peerInfo?.distance ?: "Local Mesh",
+                    isOnline = peerInfo?.isOnline ?: true,
                     lastMessageText = lastText,
                     lastMessageTime = lastTime,
                     hasUnread = latest != null && latest.sender == partner && latest.timestamp > System.currentTimeMillis() - 5000
@@ -66,116 +75,116 @@ class Repository(
     }
 
     suspend fun checkAndSeedDatabase() {
-        val posts = db.postDao().getAllPosts().first()
-        if (posts.isEmpty()) {
+        val peers = db.peerDao().getAllPeers().first()
+        if (peers.isEmpty()) {
             seedDatabase()
         }
     }
 
     private suspend fun seedDatabase() {
-        // Seed Posts
+        // Clear all to perform fresh seed
+        db.peerDao().deleteAll()
+        db.postDao().deleteAll()
+        db.messageDao().deleteAll()
+
+        // 1. Seed Peers (Offline Neighbors / Nodes)
+        val seedPeers = listOf(
+            PeerEntity(
+                username = "Alice",
+                avatarUrl = getAvatarForUser("Alice"),
+                ipAddress = "192.168.1.110",
+                connectionType = "Wi-Fi LAN",
+                distance = "12m away",
+                statusText = "Local radio ham & mesh builder. Out of internet but never out of touch! 📻",
+                isOnline = true
+            ),
+            PeerEntity(
+                username = "Bob",
+                avatarUrl = getAvatarForUser("Bob"),
+                ipAddress = "192.168.1.134",
+                connectionType = "Wi-Fi LAN",
+                distance = "34m away",
+                statusText = "P2P protocol researcher. Broadcasting on local channel.",
+                isOnline = true
+            ),
+            PeerEntity(
+                username = "Charlie",
+                avatarUrl = getAvatarForUser("Charlie"),
+                ipAddress = "Bluetooth-Mesh-S1",
+                connectionType = "Bluetooth Node",
+                distance = "8m away",
+                statusText = "Keep talking. Let's chat over local radio relays. ⚡",
+                isOnline = true
+            ),
+            PeerEntity(
+                username = "Diana",
+                avatarUrl = getAvatarForUser("Diana"),
+                ipAddress = "OffGrid-Static-Gateway",
+                connectionType = "Static Broadcast Station",
+                distance = "110m away",
+                statusText = "Neighborhood relay station. Post queries to the nearby bulletin board!",
+                isOnline = false
+            )
+        )
+        db.peerDao().insertAll(seedPeers)
+
+        // 2. Seed Public Bulletin Board Posts
         val seedPosts = listOf(
             PostEntity(
                 username = "Alice",
                 userAvatar = getAvatarForUser("Alice"),
-                imageUrl = "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&q=80&w=800",
-                caption = "Made this beautiful gourmet summer bowl! Cooking is healing. ✨ #healthy #aesthetic",
-                likesCount = 142,
+                text = "Hey neighborhood! The cellular tower down our street is undergoing maintenance. Chatting with nearby peers on local OffGrid channel. Spread the word! 📡💡",
+                locationSimulated = "Within 15m range",
+                likesCount = 8,
                 isLiked = true,
-                filterApplied = "Warm",
-                timestamp = System.currentTimeMillis() - 3600000 * 2
+                timestamp = System.currentTimeMillis() - 1000 * 60 * 30 // 30 mins ago
             ),
             PostEntity(
                 username = "Bob",
                 userAvatar = getAvatarForUser("Bob"),
-                imageUrl = "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=800",
-                caption = "Lost in the wilderness. The morning mist here is just magic. 🌲🌄",
-                likesCount = 89,
+                text = "Running a 2.4GHz custom omnidirectional antenna. Testing coverage across 2 streets. Let me know if you can hop through my node!",
+                locationSimulated = "Within 40m range",
+                likesCount = 4,
                 isLiked = false,
-                filterApplied = "Vintage",
-                timestamp = System.currentTimeMillis() - 3600000 * 4
-            ),
-            PostEntity(
-                username = "Charlie",
-                userAvatar = getAvatarForUser("Charlie"),
-                imageUrl = "https://images.unsplash.com/photo-1511556532299-8f662fc26c06?auto=format&fit=crop&q=80&w=800",
-                caption = "Clean geometric designs in city architecture. Minimalism at its peak. 🏢",
-                likesCount = 205,
-                isLiked = false,
-                filterApplied = "Mono",
-                timestamp = System.currentTimeMillis() - 3600000 * 8
+                timestamp = System.currentTimeMillis() - 1000 * 60 * 60 * 2 // 2h ago
             ),
             PostEntity(
                 username = "Diana",
                 userAvatar = getAvatarForUser("Diana"),
-                imageUrl = "https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&q=80&w=800",
-                caption = "Friday night lights! Capturing color flares. 🎇💜 #mood #photography",
-                likesCount = 312,
+                text = "COMMUNITY BULLETIN: Offline meetup scheduled at the local central square this Friday at 5 PM! We will showcase offline map-sharing over Wi-Fi hotspots! 🗺️📲",
+                locationSimulated = "Local Gateway Relay",
+                likesCount = 18,
                 isLiked = true,
-                filterApplied = "Clarendon",
-                timestamp = System.currentTimeMillis() - 3600000 * 12
+                timestamp = System.currentTimeMillis() - 1000 * 60 * 60 * 5 // 5h ago
             )
         )
         db.postDao().insertAll(seedPosts)
 
-        // Seed Stories
-        val seedStories = listOf(
-            StoryEntity(
-                username = "Alice",
-                userAvatar = getAvatarForUser("Alice"),
-                imageUrl = "https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&q=80&w=400",
-                caption = "Team meeting lunch!",
-                timestamp = System.currentTimeMillis()
-            ),
-            StoryEntity(
-                username = "Bob",
-                userAvatar = getAvatarForUser("Bob"),
-                imageUrl = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=400",
-                caption = "On early trains...",
-                timestamp = System.currentTimeMillis() - 1200000
-            ),
-            StoryEntity(
-                username = "Charlie",
-                userAvatar = getAvatarForUser("Charlie"),
-                imageUrl = "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=400",
-                caption = "Studio setups setup.",
-                timestamp = System.currentTimeMillis() - 2400000
-            ),
-            StoryEntity(
-                username = "Diana",
-                userAvatar = getAvatarForUser("Diana"),
-                imageUrl = "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&q=80&w=400",
-                caption = "Golden hour is real",
-                timestamp = System.currentTimeMillis() - 5000000
-            )
-        )
-        db.storyDao().insertAll(seedStories)
-
-        // Seed Messages
+        // 3. Seed Private/Direct Offline Conversations
         val seedMessages = listOf(
             MessageEntity(
                 sender = "Alice",
                 receiver = "me",
-                text = "Hey! Did you check out the new photo filters I used on my recipe post?",
-                timestamp = System.currentTimeMillis() - 360000 * 5
+                text = "Hey! Did your phone find my node automatically?",
+                timestamp = System.currentTimeMillis() - 1000 * 3600 * 3
             ),
             MessageEntity(
                 sender = "me",
                 receiver = "Alice",
-                text = "Yes, they look super warm and delightful! Absolutely loved the gourmet bowl.",
-                timestamp = System.currentTimeMillis() - 360000 * 4
+                text = "Yes, it discovered you on the local network router! Zero data, zero network charge required! Pretty amazing.",
+                timestamp = System.currentTimeMillis() - 1000 * 3600 * 2
             ),
             MessageEntity(
                 sender = "Alice",
                 receiver = "me",
-                text = "Awesome!! Try sending me a photo with the Clarendon filter sometime!",
-                timestamp = System.currentTimeMillis() - 360000 * 3
+                text = "That is the power of offline P2P networks. Try posting something to the Public Bulletin tab too!",
+                timestamp = System.currentTimeMillis() - 1000 * 3600 * 1
             ),
             MessageEntity(
                 sender = "Bob",
                 receiver = "me",
-                text = "Yo! Let's go hiking this weekend. I want to take some scenic foggy shots.",
-                timestamp = System.currentTimeMillis() - 360000 * 10
+                text = "Hello peer! Ping me if you receive this UDP packet broadcast.",
+                timestamp = System.currentTimeMillis() - 1000 * 1800
             )
         )
         db.messageDao().insertAll(seedMessages)
